@@ -1,0 +1,73 @@
+pipeline {
+    agent any
+    stages {
+        stage('Build') {
+            steps {
+                dir('Lab-9') {
+                    sh 'python3 -m venv .venv'
+                    sh '.venv/bin/python -m pip install --upgrade pip'
+                    sh '.venv/bin/pip install -r requirements.txt'
+                }
+            }
+        }
+        stage('Test') {
+            steps {
+                dir('Lab-9') {
+                    sh '.venv/bin/python -m unittest discover -v'
+                }
+            }
+        }
+        stage('Deploy') {
+            steps {
+                dir('Lab-9') {
+                    sh '''
+                        rm -rf python-app-deploy
+                        mkdir -p python-app-deploy
+                        cp app.py requirements.txt python-app-deploy/
+                    '''
+                    archiveArtifacts artifacts: 'python-app-deploy/**', fingerprint: true
+                }
+            }
+        }
+        stage('Run Application') {
+            steps {
+                dir('Lab-9') {
+                    sh '''
+                        if [ -f app.pid ]; then
+                            kill "$(cat app.pid)" 2>/dev/null || true
+                            rm -f app.pid
+                        fi
+                        nohup .venv/bin/python python-app-deploy/app.py \
+                            >/dev/null 2>&1 </dev/null &
+                        echo $! > app.pid
+                    '''
+                }
+            }
+        }
+        stage('Test Application') {
+            steps {
+                dir('Lab-9') {
+                    sh '.venv/bin/python -m unittest discover -v'
+                }
+            }
+        }
+    }
+    post {
+        always {
+            dir('Lab-9') {
+                sh '''
+                    if [ -f app.pid ]; then
+                        kill "$(cat app.pid)" 2>/dev/null || true
+                        rm -f app.pid
+                    fi
+                '''
+            }
+        }
+        success {
+            echo 'Pipeline completed successfully.'
+        }
+        failure {
+            echo 'Pipeline failed; inspect the stage output.'
+        }
+    }
+}

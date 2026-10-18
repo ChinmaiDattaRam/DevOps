@@ -1,0 +1,74 @@
+pipeline {
+    agent any
+
+    stages {
+        stage('Pre-check Docker') {
+            steps {
+                sh 'docker version'
+                sh 'docker info'
+            }
+        }
+        stage('Setup Workspace') {
+            steps {
+                sh 'test -s Lab-6/delivery_metrics.py'
+                sh 'test -s Lab-6/prometheus.yml'
+                sh 'test -s Lab-6/alert_rules.yml'
+            }
+        }
+        stage('Build Docker Image') {
+            steps {
+                sh 'docker compose -p devops-lab6-jenkins -f Lab-6/docker-compose.yml build'
+            }
+        }
+        stage('Run Application') {
+            steps {
+                sh 'docker compose -p devops-lab6-jenkins -f Lab-6/docker-compose.yml up -d'
+            }
+        }
+        stage('Run Prometheus & Grafana') {
+            steps {
+                sh '''
+python3 - <<'PY'
+import json
+import time
+import urllib.parse
+import urllib.request
+
+def get_json(url):
+    with urllib.request.urlopen(url, timeout=5) as response:
+        return json.load(response)
+
+deadline = time.monotonic() + 180
+while time.monotonic() < deadline:
+    try:
+        with urllib.request.urlopen(
+            "http://127.0.0.1:8000/metrics", timeout=5
+        ) as response:
+            metrics = response.read().decode()
+        assert "total_deliveries " in metrics
+        query = urllib.parse.quote('up{job="delivery_service"}')
+        result = get_json(
+            f"http://127.0.0.1:9090/api/v1/query?query={query}"
+        )
+        assert result["status"] == "success"
+        assert result["data"]["result"][0]["value"][1] == "1"
+        health = get_json("http://127.0.0.1:3000/api/health")
+        assert health["database"] == "ok"
+        break
+    except Exception:
+        time.sleep(3)
+else:
+    raise RuntimeError("Monitoring stack did not become healthy.")
+print("Metrics, Prometheus target, and Grafana health verified.")
+PY
+                '''
+            }
+        }
+    }
+
+    post {
+        always {
+            sh 'docker compose -p devops-lab6-jenkins -f Lab-6/docker-compose.yml down --remove-orphans'
+        }
+    }
+}

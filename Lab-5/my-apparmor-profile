@@ -1,0 +1,14 @@
+#include <tunables/global>
+
+/usr/local/bin/python3.12 flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  network inet stream,
+  capability net_bind_service,
+  deny capability sys_admin,
+  deny /etc/** r,
+  deny /var/** rw,
+  /app/** r,
+  /usr/local/lib/python3.12/** r,
+  deny /bin/** x,
+  deny /usr/bin/** x,
+}

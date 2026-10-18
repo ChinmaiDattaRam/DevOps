@@ -1,0 +1,10 @@
+apiVersion: 1
+providers:
+  - name: Delivery Operations
+    orgId: 1
+    folder: Delivery
+    type: file
+    disableDeletion: true
+    editable: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
