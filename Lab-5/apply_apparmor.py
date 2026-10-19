@@ -1,31 +1,27 @@
 import docker
+import time
 
+client = docker.from_env()
 
-def main():
-    client = docker.from_env()
-    client.images.build(path=".", tag="flask-apparmor")
-    container = client.containers.run(
-        "flask-apparmor",
-        ports={"5000/tcp": 5000},
-        security_opt=["apparmor=my-apparmor-profile"],
-        detach=True,
-        remove=True,
-    )
-    try:
-        print(f"Container started: {container.short_id}")
-        container_info = client.api.inspect_container(container.id)
-        apparmor_profile = container_info["AppArmorProfile"]
-        security_options = container_info["HostConfig"]["SecurityOpt"] or []
-        print(f"AppArmor profile applied: {security_options}")
-        if apparmor_profile != "my-apparmor-profile":
-            raise RuntimeError(
-                f"Expected my-apparmor-profile to be enforced, "
-                f"got {apparmor_profile!r}."
-            )
-    finally:
-        container.stop()
-        print("Container stopped")
+print("Building image from Dockerfile...")
+client.images.build(path=".", tag="flask-apparmor")
 
+print("Running container with AppArmor profile...")
+container = client.containers.run(
+    "flask-apparmor",
+    ports={'5000/tcp': 5000},
+    security_opt=["apparmor=my-apparmor-profile"],
+    detach=True
+)
+print(f"Container started: {container.short_id}")
 
-if __name__ == "__main__":
-    main()
+time.sleep(2)
+
+print("Inspecting container to verify AppArmor profile...")
+info = client.api.inspect_container(container.id)
+print(f"AppArmor profile applied: {info['HostConfig']['SecurityOpt']}")
+print(f"AppArmor profile (runtime): {info['AppArmorProfile']}")
+
+print("Stopping the container...")
+container.stop()
+container.remove()

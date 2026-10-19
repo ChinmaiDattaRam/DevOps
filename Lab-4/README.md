@@ -1,7 +1,9 @@
-# Lab 4 - Docker Bridge Networking
+# Lab 4 - Docker Networking with Multiple Containers
 
-This lab connects a Flask API, MySQL, and Redis to a user-defined bridge
-network. The MySQL image is initialized with an exercise-only password.
+This lab follows the exercise: create a user-defined bridge, build the Flask
+API image, connect Flask, MySQL, and Redis to the bridge, and use `ping` by
+container name from the Flask container. The Flask image includes
+`iputils-ping`, which the exercise's original slim image did not install.
 
 ## Code
 
@@ -13,75 +15,94 @@ from flask import Flask, jsonify
 app = Flask(__name__)
 
 
-@app.get("/about")
+@app.route("/about", methods=["GET"])
 def about():
-    return jsonify(
-        name="Simple REST API",
-        version="1.0",
-        description="This is a simple REST API built with Flask.",
-    )
+    return jsonify({
+        "name": "Simple REST API",
+        "version": "1.0",
+        "description": "This is a simple REST API built with Flask."
+    })
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5001)
+    app.run(host="0.0.0.0", debug=True, port=5001)
 ```
 
 ### `requirements.txt`
 
 ```text
-Flask>=3.1,<4
+Flask==2.0.1
+Werkzeug<2.3
 ```
+
+The Werkzeug cap preserves compatibility with this older Flask release.
 
 ### `Dockerfile`
 
 ```dockerfile
-FROM python:3.12-slim
+FROM python:3.9-slim
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends iputils-ping \
+    && rm -rf /var/lib/apt/lists/*
 COPY app.py .
 EXPOSE 5001
 CMD ["python", "app.py"]
 ```
 
-## Run and verify (PowerShell)
+## Run the exercise (PowerShell)
+
+Run these commands from this directory:
 
 ```powershell
-docker network create --driver bridge lab4-bridge
-docker build -t lab4-flask .
-docker run -d --name lab4-mysql --network lab4-bridge -e MYSQL_ROOT_PASSWORD=lab-only-password mysql:8.4
-docker run -d --name lab4-redis --network lab4-bridge redis:7-alpine
-docker run -d --name lab4-flask --network lab4-bridge -p 5001:5001 lab4-flask
+docker network create --driver bridge my-bridge-net
+docker build -t flask-api .
+docker run -d --name mysql --net=my-bridge-net -e MYSQL_ROOT_PASSWORD=lab-only-password mysql:latest
+docker run -d --name redis --net=my-bridge-net redis:latest
+docker run -d --name flask --net=my-bridge-net -p 5001:5001 flask-api
 Invoke-RestMethod http://127.0.0.1:5001/about
-docker exec lab4-flask python -c "import socket; [(print(f'{host}: {socket.getaddrinfo(host, port)[0][4][0]}:{port}'), socket.create_connection((host, port), timeout=5).close()) for host, port in [('lab4-mysql',3306),('lab4-redis',6379)]]"
-docker network inspect lab4-bridge
+docker exec -it flask bash
 ```
 
-The Flask container joins the same named network as both databases. Docker's
-embedded DNS resolves the container names; the connection check verifies that
-MySQL and Redis accept TCP connections. Name resolution and TCP checks replace
-the exercise's `ping` checks because the slim Flask image does not include ping.
+At the Flask container prompt, run the two checks from the exercise:
 
-Clean up only the resources created for this lab:
+```bash
+ping -c 3 mysql
+ping -c 3 redis
+```
+
+For non-interactive verification, run the same commands from PowerShell:
 
 ```powershell
-docker rm -f lab4-flask lab4-mysql lab4-redis
-docker network rm lab4-bridge
+docker exec flask ping -c 3 mysql
+docker exec flask ping -c 3 redis
 ```
+
+The MySQL root password is set because current MySQL images require one when
+initializing the container.
+
+## Clean up
+
+```powershell
+docker stop mysql redis flask
+docker rm mysql redis flask
+docker network rm my-bridge-net
+```
+
+## Exercise questions
+
+1. `--net` connects a container to the selected Docker network.
+2. Containers on a user-defined bridge can communicate by container name or
+   IP address.
+3. A bridge network isolates containers on a private network; host networking
+   shares the host's network stack.
+4. Publish a container port to the host with `-p host-port:container-port`.
 
 ## Results
 
 Screenshots show the [Flask API response](./screenshots/01-flask-about.jpg),
 [bridge network](./screenshots/02-bridge-network.jpg),
-[three running containers](./screenshots/03-network-containers.jpg), and
-[DNS/TCP connectivity checks](./screenshots/04-dns-tcp-and-api.jpg).
-
-## Exercise questions
-
-1. `--network` (the `--net` shorthand) attaches a container to the selected
-   Docker network.
-2. Containers on a user-defined bridge network can reach one another by
-   container name or IP address.
-3. A bridge network isolates containers on a private network; host networking
-   shares the host's network stack.
-4. Publish a container port to the host with `-p host-port:container-port`.
+[three running containers](./screenshots/03-network-containers.jpg), and the
+[container-name ping checks](./screenshots/04-ping-connectivity.jpg).

@@ -1,45 +1,72 @@
 # Lab 9 - Jenkins Multi-Stage Python Pipeline
 
-The pipeline builds an isolated virtual environment, installs Flask, runs the
-unit test, copies the source into a mock deployment directory, starts that
-copy, reruns the application test, and stops the background process in a
-post-build cleanup step.
+The pipeline builds an isolated virtual environment, installs the exercise
+Flask version, runs the unit test, copies the app to a mock deployment
+directory, starts that deployed copy, and tests its live HTTP response. A
+post-build cleanup step stops the background process.
 
 ## Code
 
 ### `app.py`
 
 ```python
+import os
+
 from flask import Flask
 
 app = Flask(__name__)
 
 
-@app.get("/")
+@app.route("/")
 def home():
     return "Hello, Jenkins Multi-Stage Pipeline!"
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(
+        host="127.0.0.1",
+        debug=True,
+        port=int(os.environ.get("PORT", "5000")),
+        use_reloader=False,
+    )
 ```
 
 ### `test_app.py`
 
 ```python
+import os
+import time
 import unittest
+from urllib.error import URLError
+from urllib.request import urlopen
 
 from app import app
 
 
 class TestApp(unittest.TestCase):
     def test_home(self):
-        response = app.test_client().get("/")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(
-            response.get_data(as_text=True),
-            "Hello, Jenkins Multi-Stage Pipeline!",
-        )
+        app_url = os.environ.get("APP_URL")
+        if app_url:
+            last_error = None
+            for _ in range(15):
+                try:
+                    with urlopen(app_url, timeout=2) as response:
+                        body = response.read().decode("utf-8")
+                        status = response.status
+                    break
+                except URLError as error:
+                    last_error = error
+                    time.sleep(1)
+            else:
+                self.fail(f"Deployed application did not become ready: {last_error}")
+        else:
+            response = app.test_client().get("/")
+            body = response.get_data(as_text=True)
+            status = response.status_code
+
+        print(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(body, "Hello, Jenkins Multi-Stage Pipeline!")
 
 
 if __name__ == "__main__":
@@ -49,14 +76,21 @@ if __name__ == "__main__":
 ### `requirements.txt`
 
 ```text
-Flask>=3.1,<4
+Flask==2.1.2
+Werkzeug<2.3
 ```
+
+The Werkzeug cap preserves compatibility with the exercise's older Flask
+release.
 
 ### `Jenkinsfile`
 
 ```groovy
 pipeline {
     agent any
+    options {
+        disableConcurrentBuilds()
+    }
     stages {
         stage('Build') {
             steps {
@@ -70,7 +104,7 @@ pipeline {
         stage('Test') {
             steps {
                 dir('Lab-9') {
-                    sh '.venv/bin/python -m unittest discover -v'
+                    sh '.venv/bin/python -m unittest discover -s . -v'
                 }
             }
         }
@@ -80,9 +114,9 @@ pipeline {
                     sh '''
                         rm -rf python-app-deploy
                         mkdir -p python-app-deploy
-                        cp app.py requirements.txt python-app-deploy/
+                        cp app.py python-app-deploy/
+                        test -f python-app-deploy/app.py
                     '''
-                    archiveArtifacts artifacts: 'python-app-deploy/**', fingerprint: true
                 }
             }
         }
@@ -94,8 +128,10 @@ pipeline {
                             kill "$(cat app.pid)" 2>/dev/null || true
                             rm -f app.pid
                         fi
-                        nohup .venv/bin/python python-app-deploy/app.py \
-                            >/dev/null 2>&1 </dev/null &
+                        APP_PORT=$(.venv/bin/python -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+                        echo "$APP_PORT" > app.port
+                        PORT="$APP_PORT" nohup .venv/bin/python python-app-deploy/app.py \
+                            >app.log 2>&1 </dev/null &
                         echo $! > app.pid
                     '''
                 }
@@ -104,7 +140,7 @@ pipeline {
         stage('Test Application') {
             steps {
                 dir('Lab-9') {
-                    sh '.venv/bin/python -m unittest discover -v'
+                    sh 'APP_URL="http://127.0.0.1:$(cat app.port)/" .venv/bin/python -m unittest discover -s . -v'
                 }
             }
         }
@@ -117,6 +153,7 @@ pipeline {
                         kill "$(cat app.pid)" 2>/dev/null || true
                         rm -f app.pid
                     fi
+                    rm -f app.port
                 '''
             }
         }
@@ -135,14 +172,14 @@ pipeline {
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m unittest discover -v
-New-Item -ItemType Directory -Force python-app-deploy | Out-Null
-Copy-Item app.py,requirements.txt .\python-app-deploy\
+.\.venv\Scripts\python.exe -m unittest discover -s . -v
 ```
 
-In Jenkins, create a Pipeline job and load the script from SCM with Script Path
-`Lab-9/Jenkinsfile`, then run **Build Now**. Jenkins agents must have Python 3
-and `venv` available.
+The Jenkinsfile uses POSIX shell syntax. In Jenkins, create a Pipeline job and
+load the script from SCM with Script Path `Lab-9/Jenkinsfile`, then run **Build
+Now**. Jenkins agents must have Python 3, `venv`, and permission to bind a
+localhost TCP port. The final test uses `APP_URL` to exercise the deployed copy
+over HTTP rather than only retesting the source module.
 
 ## Results
 

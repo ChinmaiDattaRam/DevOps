@@ -1,5 +1,8 @@
 pipeline {
     agent any
+    options {
+        disableConcurrentBuilds()
+    }
     stages {
         stage('Build') {
             steps {
@@ -13,7 +16,7 @@ pipeline {
         stage('Test') {
             steps {
                 dir('Lab-9') {
-                    sh '.venv/bin/python -m unittest discover -v'
+                    sh '.venv/bin/python -m unittest discover -s . -v'
                 }
             }
         }
@@ -23,9 +26,9 @@ pipeline {
                     sh '''
                         rm -rf python-app-deploy
                         mkdir -p python-app-deploy
-                        cp app.py requirements.txt python-app-deploy/
+                        cp app.py python-app-deploy/
+                        test -f python-app-deploy/app.py
                     '''
-                    archiveArtifacts artifacts: 'python-app-deploy/**', fingerprint: true
                 }
             }
         }
@@ -37,8 +40,10 @@ pipeline {
                             kill "$(cat app.pid)" 2>/dev/null || true
                             rm -f app.pid
                         fi
-                        nohup .venv/bin/python python-app-deploy/app.py \
-                            >/dev/null 2>&1 </dev/null &
+                        APP_PORT=$(.venv/bin/python -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+                        echo "$APP_PORT" > app.port
+                        PORT="$APP_PORT" nohup .venv/bin/python python-app-deploy/app.py \
+                            >app.log 2>&1 </dev/null &
                         echo $! > app.pid
                     '''
                 }
@@ -47,7 +52,7 @@ pipeline {
         stage('Test Application') {
             steps {
                 dir('Lab-9') {
-                    sh '.venv/bin/python -m unittest discover -v'
+                    sh 'APP_URL="http://127.0.0.1:$(cat app.port)/" .venv/bin/python -m unittest discover -s . -v'
                 }
             }
         }
@@ -60,6 +65,7 @@ pipeline {
                         kill "$(cat app.pid)" 2>/dev/null || true
                         rm -f app.pid
                     fi
+                    rm -f app.port
                 '''
             }
         }
